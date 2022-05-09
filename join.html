@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        table {
+            border-collapse: collapse;
+        }
+
+        tr, td {
+            text-align: center;
+            vertical-align: auto;
+            border: 1px solid;
+            width: 30px;
+            height: 30px;
+        }
+
+        .promo {
+            width: 30px;
+            height: 30px;
+        }
+    </style>
+    <title>Joiner</title>
+</head>
+<body>
+    <h1>join wow</h1>
+
+    <a href="index.html">Back</a>
+
+    <br><br>
+
+    <!--Username-->
+    <label for="uname">Your Username:</label><br>
+    <input type="text" name="uname" id="uname">
+    <button type="button" id="uname_button">Create</button>
+
+    <br>
+
+    <!--Message Box-->
+    <label for="message">Message:</label><br>
+    <input type="text" name="message" id="message">
+    <button type="button" id="message_button">Send</button>
+    <button type="button" id="message_clear">Clear</button>
+
+    <p id="chatlog"></p>
+
+    <br><br><br><br><br>
+
+    <div id="buttons">
+        <button hidden type="button" class="promo">Q</button>
+        <button hidden type="button" class="promo">R</button>
+        <button hidden type="button" class="promo">B</button>
+        <button hidden type="button" class="promo">N</button>
+    </div>
+
+
+    <br><br>
+
+    <table>
+        <tbody id="board">
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+            <tr> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr>
+        </tbody>
+
+    </table>
+
+
+    <p hidden id="timer"></p>
+</body>
+
+<script src="https://unpkg.com/peerjs@1.3.2/dist/peerjs.min.js"></script>
+<script>
+    (function() {
+
+        var peer = null;
+        var conn = null;
+
+        //document elements
+        const unameText   = document.getElementById("uname");
+        const unameButton = document.getElementById("uname_button");
+
+        const msgText     = document.getElementById("message");
+        const msgButton   = document.getElementById("message_button");
+        const msgClear    = document.getElementById("message_clear");
+
+        const chatlog = document.getElementById("chatlog");
+
+
+        //Docuement Listeners
+        unameButton.addEventListener('click', () => {
+            console.log("Creating peer with id '" + unameText.value + "'");
+            peer = new Peer(unameText.value, {  
+                debug: 2
+            });
+
+
+            peer.on('open', () => {
+                console.log("ID: " + peer.id);
+            });
+
+            peer.on('connection', (c) => {
+                console.log("incoming connection from " + c.peer);
+                conn = c;
+
+                conn.on('open', () => { //maybe unneccecary??
+                    console.log("connection with " + conn.peer + " now open");
+
+                    if (document.readyState === "complete") {
+                        console.log("starting game");
+                        //dom is fully loaded, but maybe waiting on images & css files
+                        let game = new Game(conn);
+                    }   
+
+                    conn.on('data', (data) => {
+                        console.log("data: '" + data + "' from " + conn.peer);
+                        chatlog.innerHTML += (conn.peer + ": " + data + '<br>');
+                    });
+                });
+            });
+
+
+            //disable uname button and text box    
+        });
+
+        msgButton.addEventListener('click', () => {
+            console.log("sending '" + msgText.value + "' to " + conn.peer);
+            conn.send(msgText.value);
+            //add to our chat log
+            chatlog.innerHTML += (peer.id + ": " + msgText.value + "<br>");
+        });
+
+        msgClear.addEventListener('click', () => {
+            chatlog.innerHTML = " ";
+        })
+
+
+    })();
+</script>
+
+<!--actual code-->
+<script>
+    class Constants {
+        constructor() {
+            this.numRanks = 8;
+            this.numFiles = 8;
+
+            this.colour1  = "white";
+            this.colour2  = "black";
+            this.blank    = null;
+
+            this.ourColour = this.colour2;
+            this.theirColour = this.colour1;
+
+            this.drawLegalMoves = true;
+
+            this.gameplay  = "gameplay";
+            this.promoMenu = "promo";
+            this.otherTurn = "waiting";
+        }
+    }
+
+    class Game {
+        constructor(conn) {
+            this.constants = new Constants(); 
+            
+            this.board  = [[],[],[],[],[],[],[],[]];
+
+            this.selectedSquare = [null, null]; 
+
+            this.state = this.constants.otherTurn;
+
+            //network stuff
+            this.conn = conn;
+
+            this.setupBoard();
+            this.setupSquareEventListeners();
+        };
+        
+        setupBoard() {
+            //first and last ranks
+            for (let i=0; i<2; i++) {
+                let rank =   (i==0 ? 0 : 7);
+                let colour = (i==0 ? this.constants.theirColour : this.constants.ourColour);
+
+                this.board[rank][0] = new Rook  (rank, 0, colour);
+                this.board[rank][1] = new Knight(rank, 1, colour);
+                this.board[rank][2] = new Bishop(rank, 2, colour);
+                this.board[rank][3] = new Queen (rank, 3, colour);
+                this.board[rank][4] = new King  (rank, 4, colour);
+                this.board[rank][5] = new Bishop(rank, 5, colour);
+                this.board[rank][6] = new Knight(rank, 6, colour);
+                this.board[rank][7] = new Rook  (rank, 7, colour);
+            }
+            
+            //pawns
+            for(let i=0; i<2; i++) {
+                let rank =   (i==0 ? 1 : 6);
+                let colour = (i==0 ? this.constants.theirColour : this.constants.ourColour);
+                
+                //place 8 pawns
+                for (let file=0; file<this.constants.numFiles; file++) {
+                    this.board[rank][file] = new Pawn(rank, file, colour);
+                }
+                
+            }
+
+            //blank spaces
+            for (let rank=0+2; rank<this.constants.numRanks-2; rank++) {
+                for(let file=0; file<this.constants.numFiles; file++) {
+                    this.board[rank][file] = new Blank(rank, file);//new Piece(rank, file, this.constants.blank);
+                }
+            }
+            this.board[5][2] = new Knight(5,2,this.constants.colour2);
+            console.log(this.board);
+            this.printBoard();
+        }
+
+        printBoard() {
+            
+            for(let rank=0; rank<this.constants.numRanks; rank++) {
+                for (let file=0; file<this.constants.numFiles; file++) {
+                    
+                    //console.log(rank, file, document.getElementById("board").getElementsByTagName("tr").item(rank).getElementsByTagName("td").item(file));
+
+                    //get letter to put in table (colour1 is uppercase)
+                    let letter;
+                    
+                    if (this.board[rank][file].colour == this.constants.colour1) {
+                        letter = this.board[rank][file].letter.toUpperCase();
+                    } else {
+                        letter = this.board[rank][file].letter.toLowerCase();
+                    }
+                    
+                    //get innerHTML of appropriate <td>
+                    document.getElementById("board")       //<tbody>
+                    .getElementsByTagName("tr").item(rank) //the 'rank'th <tr> in <tbody>
+                    .getElementsByTagName("td").item(file) //the 'file'th <td> in <tr>
+                    .innerHTML = letter;   //innerHTML of <td>
+
+                    //set colour
+                    if ( (rank+file) % 2 === 0) {
+                        document.getElementById("board")       //<tbody>
+                        .getElementsByTagName("tr").item(rank) //the 'rank'th <tr> in <tbody>
+                        .getElementsByTagName("td").item(file) //the 'file'th <td> in <tr>
+                        .style.backgroundColor = '#e7ca97'; //light
+                    }
+                    else {
+                        document.getElementById("board")       //<tbody>
+                        .getElementsByTagName("tr").item(rank) //the 'rank'th <tr> in <tbody>
+                        .getElementsByTagName("td").item(file) //the 'file'th <td> in <tr>
+                        .style.backgroundColor = '#ab843f'; //dark
+                    }
+
+                    //set selected square colour
+                    if (this.selectedSquare[0] !== null && this.selectedSquare[1] !== null) {
+                        document.getElementById("board")       //<tbody>
+                        .getElementsByTagName("tr").item(this.selectedSquare[0]) //the selected <tr> in <tbody>
+                        .getElementsByTagName("td").item(this.selectedSquare[1]) //the selected <td> in <tr>
+                        .style.backgroundColor = '#ff0000';
+
+                        console.log(this.selectedSquare, this.board);
+                        //colour legal moves
+                        console.log(this.board);
+                        this.board[this.selectedSquare[0]][this.selectedSquare[1]].test();
+                        if (this.board[this.selectedSquare[0]][this.selectedSquare[1]].move(this.selectedSquare[0], this.selectedSquare[1], rank, file, this.board, false) === true) {
+                            document.getElementById("board")       //<tbody>
+                            .getElementsByTagName("tr").item(rank) //the selected <tr> in <tbody>
+                            .getElementsByTagName("td").item(file) //the selected <td> in <tr>
+                            .style.backgroundColor = '#00ff00';
+                        }
+                    }
+
+
+                }
+            }
+        }
+
+        setupSquareEventListeners() {
+
+            //peer moved, record it
+            this.conn.on('data', (data) => {
+                //let receivedBoard = JSON.parse(data);
+
+                //oof we gotta flip it
+                for (let rank=0; rank<this.constants.numRanks; rank++) {
+                    for (let file=0; file<this.constants.numFiles; file++) {
+                        //copy over row col colour and letter
+                        this.board[rank][file].row    = data[7-rank][file].row;
+                        this.board[rank][file].col    = data[7-rank][file].col;
+                        this.board[rank][file].colour = data[7-rank][file].colour;
+                        this.board[rank][file].letter = data[7-rank][file].letter;
+                    }
+                }
+
+                this.state = this.constants.gameplay;
+                this.printBoard();
+            })
+
+            for(let rank=0; rank<this.constants.numRanks; rank++) {
+                for (let file=0; file<this.constants.numFiles; file++) {
+
+                    document.getElementById("board")       //<tbody>
+                    .getElementsByTagName("tr").item(rank) //the 'rank'th <tr> in <tbody>
+                    .getElementsByTagName("td").item(file) //the 'file'th <td> in <tr>
+                    .addEventListener('click', () => {   
+                        if (this.state !== this.constants.gameplay) return;
+
+                        //no square selected
+                        if (this.selectedSquare[0] === null && this.selectedSquare[1] === null) {
+                            //don't select a blank square
+                            if (this.board[rank][file].colour === this.constants.blank) {
+                                return;
+                            }
+                            //console.log("selecting " + rank, file);
+                            this.selectedSquare[0] = rank;
+                            this.selectedSquare[1] = file;
+                            console.log(this.selectedSquare);
+                            this.printBoard();
+                        }
+                        //clicked selected square
+                        else if (this.selectedSquare[0] === rank && this.selectedSquare[1] === file) {
+                            this.selectedSquare[0] = null;
+                            this.selectedSquare[1] = null;
+                            //console.log(this.selectedSquare);
+                            this.printBoard();
+                        }
+                        //clicked a different square than the one selected
+                        else {
+                            //console.log("move from " + this.selectedSquare[0], this.selectedSquare[1] + " to " + rank, file);
+                            //move the piece and if it worked send it over to peer
+                            if (this.board[this.selectedSquare[0]][this.selectedSquare[1]]
+                                .move(this.selectedSquare[0], this.selectedSquare[1], rank, file, this.board, true) ) {
+                                
+                                this.state = this.constants.otherTurn;
+                                this.conn.send(this.board);
+
+                                console.log(this.conn);
+                                
+                            }
+                            
+                            //check pawn promotion
+                            if (rank === 0 && this.board[rank][file].letter === 'p') {
+                                console.log("we gon promo");
+                                
+                                //this.board[rank][file].promote(file, this.board);
+                                this.promote(file);
+                            }
+                            
+                            //deselect square
+                            this.selectedSquare[0] = this.selectedSquare[1] = null;
+                            //console.log(this.selectedSquare);
+                            this.printBoard();
+                        }
+                        
+                    });
+
+                }
+            }
+        }
+
+        promote(file) {
+            //4 promotion buttons
+            let buttons = document.getElementById("buttons");
+            console.log(buttons);
+
+            this.state = this.constants.promoMenu;
+
+            for(let i=0; i<4; i++) {
+                buttons.children[i].hidden = false;
+
+
+                buttons.children[i].addEventListener('click', () => {
+                    let newPiece;
+
+                    switch (i) {
+                        case 0: //queen
+                        newPiece = new Queen(0, file, this.constants.ourColour);
+                        break;
+
+                        case 1: //rook
+                        newPiece = new Rook(0, file, this.constants.ourColour);
+                        break;
+
+                        case 2: //bishop
+                        newPiece = new Bishop(0, file, this.constants.ourColour);
+                        break;
+
+                        case 3: //knight
+                        newPiece = new Knight(0, file, this.constants.ourColour);
+                        break;
+                    }
+
+                    this.board[0][file] = newPiece;
+
+
+                    this.printBoard();
+
+                    for(let i=0; i<4; i++) {
+                        buttons.children[i].hidden = true;
+                    }
+                    
+                    this.state = this.constants.gameplay;
+
+                    return;                    
+                })
+            }
+
+            return;
+        }
+        
+
+    };
+
+    class Piece {
+
+        constructor(row, col, colour) {
+            this.constants = new Constants();
+            this.row    = row;
+            this.col    = col;
+            this.colour = colour;
+        }
+
+        test() {
+            console.log("aaaaaaaa");
+        }
+
+        noChecks(srcRank, srcFile, destRank, destFile, board) {
+            return true; //ILLEGAL MOVES CURRENTLY ALLOWED
+
+
+            //find king
+            let kingPos = [null, null];
+
+            loops: for (let rank=0; rank<this.constants.numRanks; rank++) {
+                for (let file=0; file<this.constants.numFiles; file++) {
+                    //our king
+                    if (board[rank][file].letter === 'k' && board[rank][file].colour === this.constants.colour1) {
+                        kingPos[0] = rank;
+                        kingPos[1] = file;
+                        break loops;
+                    }
+                    
+                }
+            }
+
+            //try move every enemy piece to king
+
+
+        }
+
+    };
+
+    class Blank extends Piece {
+        constructor(row, col) {
+            super(row, col, (new Constants()).blank);
+            this.letter = ' ';
+        }
+
+        move() {
+            return false;
+        }
+    }
+ 
+    class Pawn extends Piece {
+
+        constructor(row, col, colour) {
+            //call the Piece class constructor
+            super(row, col, colour);
+            this.letter = 'p';
+        }
+
+        move(srcRank, srcFile, destRank, destFile, board, actuallyMove) {
+
+            //trying to move onto a piece of your colour
+            if (board[destRank][destFile].colour === board[srcRank][srcFile].colour) {
+                return false;
+            }
+
+            //capture (rank is one smaller and files are adjacent)
+            if (destRank === srcRank-1 && Math.abs(destFile-srcFile) === 1) {
+                //dest square is enemy colour
+                if (board[destRank][destFile].colour === this.constants.theirColour) {
+                    
+                    //success, move that piece
+                    if (actuallyMove) {
+                        console.log("moving dat pawn");
+                        let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                        board[destRank][destFile] = board[srcRank][srcFile];
+                        board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+                    }
+
+                    if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                        return true;
+                    } else if (actuallyMove) {
+                        //moving into check, undo
+                        console.log("nah bruh you cant move into check");
+                        board[srcRank][srcFile] = board[destRank][destFile];
+                        board[destRank][destFile] = temp;
+                    }
+                }
+            }
+
+            //2 space movement
+            if (srcRank === 6 && destRank === 6-2 && destFile === srcFile) {
+                //both spaces empty
+                if (board[destRank]  [destFile].colour === this.constants.blank && 
+                    board[destRank+1][destFile].colour === this.constants.blank    ) {
+
+                    //success, move that piece
+                    if (actuallyMove) {
+                        console.log("moving dat pawn");
+                        let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                        board[destRank][destFile] = board[srcRank][srcFile];
+                        board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+                    }
+
+                    if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                        return true;
+                    } else if (actuallyMove) {
+                        //moving into check, undo
+                        console.log("nah bruh you cant move into check");
+                        board[srcRank][srcFile] = board[destRank][destFile];
+                        board[destRank][destFile] = temp;
+                    }
+
+                }
+            }
+
+            //regular movement 1 space
+            if (destRank === srcRank-1 && destFile === srcFile) {
+                //no piece in dest space
+                if (board[destRank][destFile].colour === this.constants.blank) {
+
+                    //success, move that piece
+                    if (actuallyMove) {
+                        console.log("moving dat pawn");
+                        let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                        board[destRank][destFile] = board[srcRank][srcFile];
+                        board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+                    }
+                    
+
+                    if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                        return true;
+                    } else if (actuallyMove) {
+                        //moving into check, undo
+                        console.log("nah bruh you cant move into check");
+                        board[srcRank][srcFile] = board[destRank][destFile];
+                        board[destRank][destFile] = temp;
+                    }
+
+                }
+            }
+
+            //in peasant
+
+            return false;
+
+        }
+
+        // promote(file, board) {
+        //     let buttons = document.getElementById("buttons");
+        //     console.log(buttons);
+
+        //     for(let i=0; i<4; i++) {
+        //         buttons.children[i].hidden = false;
+
+
+        //         buttons.children[i].addEventListener('click', () => {
+        //             let newPiece;
+
+        //             switch (i) {
+        //                 case 0: //queen
+        //                 newPiece = new Queen(0, file, this.constants.colour1);
+        //                 break;
+
+        //                 case 1: //rook
+        //                 newPiece = new Rook(0, file, this.constants.colour1);
+        //                 break;
+
+        //                 case 2: //bishop
+        //                 newPiece = new Bishop(0, file, this.constants.colour1);
+        //                 break;
+
+        //                 case 3: //knight
+        //                 newPiece = new Knight(0, file, this.constants.colour1);
+        //                 break;
+        //             }
+                    
+        //             board[0][file] = newPiece;
+
+
+        //             Game.printBoard();
+                    
+        //             return;                    
+        //         })
+        //     }
+
+        //     return;
+        // }
+
+    };
+
+    class Knight extends Piece {
+
+        constructor(row, col, colour) {
+            //call the Piece class constructor
+            super(row, col, colour);
+            this.letter = 'n';
+        }
+
+        //if actually move is false, just returns bool without moving
+        move(srcRank, srcFile, destRank, destFile, board, actuallyMove) {
+
+            //trying to move onto a piece of your colour
+            if (board[destRank][destFile].colour === board[srcRank][srcFile].colour) {
+                return false;
+            }
+
+            let rankDiff = Math.abs(destRank-srcRank);
+            let fileDiff = Math.abs(destFile-srcFile);
+
+            if ( (rankDiff === 1 && fileDiff === 2) || (rankDiff === 2 && fileDiff === 1) ) {
+
+                //success, move that piece
+                if (actuallyMove) {
+                    console.log("moving dat knight");
+                    let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                    board[destRank][destFile] = board[srcRank][srcFile];
+                    board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+                }
+
+                if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                    return true;
+                } else if (actuallyMove) {
+                    //moving into check, undo
+                    console.log("nah bruh you cant move into check");
+                    board[srcRank][srcFile] = board[destRank][destFile];
+                    board[destRank][destFile] = temp;
+                }
+
+            }
+
+            return false;
+        }
+
+    };
+
+    class Bishop extends Piece {
+
+        constructor(row, col, colour) {
+            //call the Piece class constructor
+            super(row, col, colour);
+            this.letter = 'b';
+        }
+
+        move(srcRank, srcFile, destRank, destFile, board, actuallyMove) {
+
+            //trying to move onto a piece of your colour
+            if (board[destRank][destFile].colour === board[srcRank][srcFile].colour) {
+                return false;
+            }
+
+            let rankDiff = Math.abs(destRank-srcRank);
+            let fileDiff = Math.abs(destFile-srcFile);
+
+            //diagonals only
+            if(rankDiff !== fileDiff) return false;
+
+            //used to loop from src to dest
+            //-1 or 1; added to step in the right direction each time
+            let rankDir;
+            let fileDir;
+            if (destRank > srcRank) rankDir = 1; //up
+            else rankDir = -1; //down
+
+            if (destFile > srcFile) fileDir = 1 //right
+            else fileDir = -1; //left
+
+            //for every increment, add rankdir and filedir to check the next square in the diagonal
+            for (let step=1; step<rankDiff; step++) {
+                //i=1 b/c no need to check the bishop's square
+                //also just < b/c no need to check last square
+
+                //middle square not blank?
+                if (board[srcRank+(step*rankDir)][srcFile+(step*fileDir)].colour !== this.constants.blank) {
+                    return false;
+                }
+            }
+
+            //all squares between src and dest are blank
+            if (actuallyMove) {
+                console.log("moving dat bishop");
+                let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                board[destRank][destFile] = board[srcRank][srcFile];
+                board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+            }
+
+            if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                return true;
+            } else if (actuallyMove) {
+                //moving into check, undo
+                console.log("nah bruh you cant move into check");
+                board[srcRank][srcFile] = board[destRank][destFile];
+                board[destRank][destFile] = temp;
+            }
+
+
+            return false;
+            
+        }
+
+    };
+
+    class Rook extends Piece {
+
+        constructor(row, col, colour) {
+            //call the Piece class constructor
+            super(row, col, colour);
+            this.letter = 'r';
+        }
+
+        move(srcRank, srcFile, destRank, destFile, board, actuallyMove) {
+
+            //trying to move onto a piece of your colour
+            if (board[destRank][destFile].colour === board[srcRank][srcFile].colour) {
+                return false;
+            }
+
+            //not in a line either way
+            if (destRank !== srcRank && destFile !== srcFile) {
+                return false;
+            }
+
+            //-1, 0, or 1; added to step in the right direction each time
+            let rankDir;
+            let fileDir;
+
+            if (destRank > srcRank) {
+                rankDir = 1;
+                fileDir = 0;
+                
+            }
+            else if (destRank < srcRank) {
+                rankDir = -1;
+                fileDir = 0;
+            } 
+            else if (destFile > srcFile) {
+                rankDir = 0;
+                fileDir = 1;
+            }
+            else if (destFile < srcFile) {
+                rankDir = 0;
+                fileDir = -1;
+            }
+
+            //num steps needed (one will be 0)
+            let rankDiff = Math.abs(destRank-srcRank);
+            let fileDiff = Math.abs(destFile-srcFile);
+
+            for (let step=1; step<Math.max(rankDiff, fileDiff); step++) {
+                //i=1 b/c no need to check the rook's square
+                //also just < b/c no need to check last square
+
+                //middle not blank?
+                if (board[srcRank+(step*rankDir)][srcFile+(step*fileDir)].colour !== this.constants.blank) {
+                    //smth in the way
+                    return false;
+                }
+            }
+
+            //all squares between src and dest are blank
+            if (actuallyMove) {
+                console.log("moving dat rook");
+                let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                board[destRank][destFile] = board[srcRank][srcFile];
+                board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+            }
+
+            if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                return true;
+            } else if (actuallyMove) {
+                //moving into check, undo
+                console.log("nah bruh you cant move into check");
+                board[srcRank][srcFile] = board[destRank][destFile];
+                board[destRank][destFile] = temp;
+            }
+
+
+            return false;
+
+        }
+
+    };
+
+    class Queen extends Piece {
+
+        constructor(row, col, colour) {
+            //call the Piece class constructor
+            super(row, col, colour);
+            this.letter = 'q';
+        }
+
+        move(srcRank, srcFile, destRank, destFile, board, actuallyMove) {
+            if (new Rook().  move(srcRank, srcFile, destRank, destFile, board, actuallyMove) ||
+                new Bishop().move(srcRank, srcFile, destRank, destFile, board, actuallyMove)  ) {
+                return true;        
+            }
+            else return false;
+        }
+
+    };
+
+    class King extends Piece {
+
+        constructor(row, col, colour) {
+            //call the Piece class constructor
+            super(row, col, colour);
+            this.letter = 'k';
+        }
+
+        move(srcRank, srcFile, destRank, destFile, board, actuallyMove) {
+
+            //trying to move onto a piece of your colour
+            if (board[destRank][destFile].colour === board[srcRank][srcFile].colour) {
+                return false;
+            }
+
+            let rankDiff = Math.abs(destRank-srcRank);
+            let fileDiff = Math.abs(destFile-srcFile);
+
+            if (rankDiff > 1 || fileDiff > 1) return false;
+
+            //good to go
+            if (actuallyMove) {
+                console.log("moving dat rook");
+                let temp = board[destRank][destFile]; //in case of invaid movement by check, remember what is here so undo is possible
+                board[destRank][destFile] = board[srcRank][srcFile];
+                board[srcRank][srcFile] = new Blank(srcFile, srcFile);
+            }
+
+            if (super.noChecks(srcRank, srcFile, destRank, destFile, board)) {
+                return true;
+            } else if (actuallyMove) {
+                //moving into check, undo
+                console.log("nah bruh you cant move into check");
+                board[srcRank][srcFile] = board[destRank][destFile];
+                board[destRank][destFile] = temp;
+            }
+
+            return false;
+
+        }
+
+    };
+
+    //TIMER STUFF
+    (function() {
+
+
+        const timerInterval = 100; //ms
+        const energyCap     = 10;
+        let   energy        = 0;
+
+        
+        //timer be counting up
+        setInterval(() => {
+            //add time to timer
+            energy += timerInterval / 1000;
+            if (energy > 10) energy = 10;
+
+            //put timer in document (keep 1 decimal)
+            document.getElementById("timer").innerHTML = Math.round(10 * energy) / 10;
+
+            //if whole number, add '.0'
+            //computer adding error stuff means it can be a little bigger or smaller
+            if ( energy % 1 < 0.001   ||   energy % 1 > 0.999 ) {
+                document.getElementById("timer").innerHTML += ".0";
+            }
+
+
+        }, timerInterval);
+
+    })();
+</script>
+
+</html>
